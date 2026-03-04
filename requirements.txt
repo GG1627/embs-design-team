@@ -1,5 +1,5 @@
-opencv-python==4.10.0.84
-mediapipe==0.10.18
-numpy==1.26.4
-scipy==1.13.1
-imutils==0.5.3
+opencv-python
+mediapipe
+numpy
+scipy
+imutils
