@@ -1,0 +1,38 @@
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+import joblib
+
+# Load dataset
+data = pd.read_csv("posture_dataset.csv")
+
+# Features
+X = data[["tilt_change", "shoulder_change", "ratio_change"]]
+
+# Labels
+y = data["label"]
+
+# Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+# Train Random Forest model
+model = RandomForestClassifier(
+    n_estimators=100,
+    random_state=42
+)
+
+model.fit(X_train, y_train)
+
+# Test model accuracy
+predictions = model.predict(X_test)
+accuracy = accuracy_score(y_test, predictions)
+
+print("Model Accuracy:", accuracy)
+
+# Save model
+joblib.dump(model, "posture_model.pkl")
+
+print("Model saved as posture_model.pkl")
