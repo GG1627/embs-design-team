@@ -1,255 +1,207 @@
-import cv2
-import pyttsx3
+import json
+import os
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+import wave
+from pathlib import Path
+
 import numpy as np
-
-# ----------------------------
-# Text-to-speech setup
-# ----------------------------
-engine = pyttsx3.init()
-
-def speak(text):
-    engine.say(text)
-    engine.runAndWait()
-
-# ----------------------------
-# Load base robot face
-# ----------------------------
-image = cv2.imread("./robot/Face.png")
-
-if image is None:
-    print("Error: Face.png not found")
-    exit()
-
-state = "neutral"
-
-# Cyan color similar to example image (OpenCV uses BGR)
-FACE_COLOR = (230, 255, 0)
-
-def draw_face(base_img, state):
-    """
-    Draw robot facial features on top of the blank gray face base.
-    Designed to look closer to the example image.
-    """
-    img = base_img.copy()
-    h, w, _ = img.shape
-
-    # ----------------------------
-    # Main feature placement
-    # ----------------------------
-    left_eye = (int(w * 0.38), int(h * 0.42))
-    right_eye = (int(w * 0.62), int(h * 0.42))
-
-    eye_radius = int(min(w, h) * 0.045)
-
-    mouth_center = (int(w * 0.50), int(h * 0.60))
-    mouth_axes = (int(w * 0.16), int(h * 0.11))
-
-    # ----------------------------
-    # Helper functions
-    # ----------------------------
-    def draw_round_eyes():
-        cv2.circle(img, left_eye, eye_radius, FACE_COLOR, -1)
-        cv2.circle(img, right_eye, eye_radius, FACE_COLOR, -1)
-
-    def draw_smile():
-        cv2.ellipse(
-            img,
-            mouth_center,
-            mouth_axes,
-            0,
-            20,
-            160,
-            FACE_COLOR,
-            12
-        )
-
-    def draw_neutral_mouth():
-        cv2.line(
-            img,
-            (int(w * 0.40), int(h * 0.63)),
-            (int(w * 0.60), int(h * 0.63)),
-            FACE_COLOR,
-            10
-        )
-
-    def draw_small_frown():
-        cv2.ellipse(
-            img,
-            (int(w * 0.50), int(h * 0.72)),
-            (int(w * 0.10), int(h * 0.04)),
-            0,
-            200,
-            340,
-            FACE_COLOR,
-            8
-        )
-
-    # ----------------------------
-    # NEUTRAL
-    # ----------------------------
-    if state == "neutral":
-        draw_round_eyes()
-        draw_neutral_mouth()
-
-    # ----------------------------
-    # HAPPY
-    # ----------------------------
-    elif state == "happy":
-        draw_round_eyes()
-        draw_smile()
-
-    # ----------------------------
-    # SIDE-EYE
-    # ----------------------------
-    elif state == "side_eye":
-        # eye outlines
-        cv2.ellipse(img, left_eye, (eye_radius + 12, eye_radius - 2), 0, 0, 360, FACE_COLOR, 4)
-        cv2.ellipse(img, right_eye, (eye_radius + 12, eye_radius - 2), 0, 0, 360, FACE_COLOR, 4)
-
-        # pupils pushed to the right for suspicious look
-        cv2.circle(img, (left_eye[0] + 12, left_eye[1]), 8, FACE_COLOR, -1)
-        cv2.circle(img, (right_eye[0] + 12, right_eye[1]), 8, FACE_COLOR, -1)
-
-        # one eyebrow slightly lowered
-        cv2.line(
-            img,
-            (left_eye[0] - 18, left_eye[1] - 28),
-            (left_eye[0] + 18, left_eye[1] - 22),
-            FACE_COLOR,
-            4
-        )
-        cv2.line(
-            img,
-            (right_eye[0] - 18, right_eye[1] - 20),
-            (right_eye[0] + 18, right_eye[1] - 28),
-            FACE_COLOR,
-            4
-        )
-
-        # crooked mouth
-        cv2.line(
-            img,
-            (int(w * 0.42), int(h * 0.64)),
-            (int(w * 0.59), int(h * 0.62)),
-            FACE_COLOR,
-            8
-        )
-
-    # ----------------------------
-    # PANIC
-    # ----------------------------
-    elif state == "panic":
-        # big alarmed eyes
-        cv2.circle(img, left_eye, eye_radius + 8, FACE_COLOR, 5)
-        cv2.circle(img, right_eye, eye_radius + 8, FACE_COLOR, 5)
-
-        cv2.circle(img, left_eye, 7, FACE_COLOR, -1)
-        cv2.circle(img, right_eye, 7, FACE_COLOR, -1)
-
-        # eyebrows raised
-        cv2.line(
-            img,
-            (left_eye[0] - 20, left_eye[1] - 35),
-            (left_eye[0] + 20, left_eye[1] - 28),
-            FACE_COLOR,
-            4
-        )
-        cv2.line(
-            img,
-            (right_eye[0] - 20, right_eye[1] - 28),
-            (right_eye[0] + 20, right_eye[1] - 35),
-            FACE_COLOR,
-            4
-        )
-
-        # open mouth
-        cv2.ellipse(
-            img,
-            (int(w * 0.50), int(h * 0.66)),
-            (20, 32),
-            0,
-            0,
-            360,
-            FACE_COLOR,
-            6
-        )
-
-    # ----------------------------
-    # FAINT
-    # ----------------------------
-    elif state == "faint":
-        # drooping eyes
-        cv2.ellipse(img, left_eye, (22, 10), 0, 200, 340, FACE_COLOR, 5)
-        cv2.ellipse(img, right_eye, (22, 10), 0, 200, 340, FACE_COLOR, 5)
-
-        # dazed x eyes
-        cv2.line(
-            img,
-            (left_eye[0] - 8, left_eye[1] - 8),
-            (left_eye[0] + 8, left_eye[1] + 8),
-            FACE_COLOR,
-            3
-        )
-        cv2.line(
-            img,
-            (left_eye[0] + 8, left_eye[1] - 8),
-            (left_eye[0] - 8, left_eye[1] + 8),
-            FACE_COLOR,
-            3
-        )
-        cv2.line(
-            img,
-            (right_eye[0] - 8, right_eye[1] - 8),
-            (right_eye[0] + 8, right_eye[1] + 8),
-            FACE_COLOR,
-            3
-        )
-        cv2.line(
-            img,
-            (right_eye[0] + 8, right_eye[1] - 8),
-            (right_eye[0] - 8, right_eye[1] + 8),
-            FACE_COLOR,
-            3
-        )
-
-        # weak droopy mouth
-        draw_small_frown()
-
-    return img
+import requests
+import sounddevice as sd
 
 
-print("Controls:")
-print("n = neutral")
-print("h = happy")
-print("s = side-eye")
-print("p = panic")
-print("f = faint")
-print("q = quit")
+VOICE_ID = "PoHUWWWMHFrA8z7Q88pu"
+ELEVEN_SAMPLE_RATE = 22050
+MIC_SAMPLE_RATE = 16000
+RECORD_SECONDS = 6
+GROQ_CHAT_MODEL = "llama-3.3-70b-versatile"
+GROQ_STT_MODEL = "whisper-large-v3-turbo"
 
-speak("Hello. I am your wellness robot.")
 
-while True:
-    face = draw_face(image, state)
-    cv2.imshow("Robot Face", face)
+def load_dotenv() -> None:
+    candidate_paths = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent.parent / ".env",
+    ]
+    env_path = next((p for p in candidate_paths if p.exists()), None)
+    if not env_path:
+        return
 
-    key = cv2.waitKey(1) & 0xFF
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip("'").strip('"'))
 
-    if key == ord('q'):
-        break
-    elif key == ord('n'):
-        state = "neutral"
-        speak("Neutral mode.")
-    elif key == ord('h'):
-        state = "happy"
-        speak("I am feeling happy.")
-    elif key == ord('s'):
-        state = "side_eye"
-        speak("Hmm... suspicious.")
-    elif key == ord('p'):
-        state = "panic"
-        speak("Warning! Something is wrong!")
-    elif key == ord('f'):
-        state = "faint"
-        speak("System overload... shutting down.")
 
-cv2.destroyAllWindows()
+def get_required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing required env var: {name}")
+    return value
+
+
+def record_user_audio(seconds: int = RECORD_SECONDS) -> str:
+    print(f"\nListening for {seconds} seconds...")
+    frames = sd.rec(
+        int(seconds * MIC_SAMPLE_RATE),
+        samplerate=MIC_SAMPLE_RATE,
+        channels=1,
+        dtype="int16",
+    )
+    sd.wait()
+    print("Recording complete.")
+
+    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    temp_file.close()
+
+    with wave.open(temp_file.name, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(MIC_SAMPLE_RATE)
+        wav_file.writeframes(np.asarray(frames, dtype=np.int16).tobytes())
+
+    return temp_file.name
+
+
+def transcribe_with_groq(audio_path: str, groq_api_key: str) -> str:
+    url = "https://api.groq.com/openai/v1/audio/transcriptions"
+    headers = {"Authorization": f"Bearer {groq_api_key}"}
+
+    with open(audio_path, "rb") as f:
+        files = {"file": (Path(audio_path).name, f, "audio/wav")}
+        data = {
+            "model": GROQ_STT_MODEL,
+            "temperature": "0",
+            "response_format": "json",
+            "language": "en",
+        }
+        response = requests.post(url, headers=headers, data=data, files=files, timeout=60)
+
+    if response.status_code >= 400:
+        raise RuntimeError(f"Groq STT failed ({response.status_code}): {response.text}")
+
+    transcript = response.json().get("text", "").strip()
+    return transcript
+
+
+def chat_with_groq(messages: list[dict[str, str]], groq_api_key: str) -> str:
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {groq_api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": GROQ_CHAT_MODEL,
+        "messages": messages,
+        "temperature": 0.6,
+        "max_tokens": 300,
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    if response.status_code >= 400:
+        raise RuntimeError(f"Groq chat failed ({response.status_code}): {response.text}")
+
+    try:
+        return response.json()["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Unexpected Groq chat response: {response.text}") from exc
+
+
+def synthesize_pcm(eleven_api_key: str, voice_id: str, text: str) -> bytes:
+    query = urllib.parse.urlencode({"output_format": "pcm_22050"})
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream?{query}"
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {"stability": 0.45, "similarity_boost": 0.8},
+    }
+
+    request = urllib.request.Request(
+        url=url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "xi-api-key": eleven_api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/pcm",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"ElevenLabs failed ({exc.code}): {details}") from exc
+
+
+def write_wav(pcm_data: bytes, sample_rate: int = ELEVEN_SAMPLE_RATE) -> str:
+    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    temp_file.close()
+
+    with wave.open(temp_file.name, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(pcm_data)
+
+    return temp_file.name
+
+
+def play_wav(path: str) -> None:
+    if os.name == "nt":
+        import winsound
+
+        winsound.PlaySound(path, winsound.SND_FILENAME)
+    else:
+        print(f"Audio generated at: {path}")
+
+
+def main() -> None:
+    load_dotenv()
+    eleven_api_key = get_required_env("ELEVEN_LABS_API_KEY")
+    groq_api_key = get_required_env("GROQ_API_KEY")
+
+    print("Voice chat ready.")
+    print("Press ENTER to talk, or type q then ENTER to quit.")
+
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": (
+                "You are a friendly voice assistant. Keep responses concise, natural, "
+                "and easy to speak out loud."
+            ),
+        }
+    ]
+
+    while True:
+        user_control = input("\n[ENTER]=speak, q=quit: ").strip().lower()
+        if user_control in {"q", "quit", "exit"}:
+            print("Goodbye.")
+            break
+
+        audio_path = record_user_audio()
+        user_text = transcribe_with_groq(audio_path, groq_api_key)
+        if not user_text:
+            print("I didn't catch that. Please try again.")
+            continue
+
+        print(f"You: {user_text}")
+        messages.append({"role": "user", "content": user_text})
+
+        assistant_text = chat_with_groq(messages, groq_api_key)
+        messages.append({"role": "assistant", "content": assistant_text})
+        print(f"Assistant: {assistant_text}")
+
+        pcm_data = synthesize_pcm(eleven_api_key, VOICE_ID, assistant_text)
+        wav_path = write_wav(pcm_data)
+        play_wav(wav_path)
+
+
+if __name__ == "__main__":
+    main()
