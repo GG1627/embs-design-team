@@ -1,70 +1,93 @@
 import json
 import os
+import random
 import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import wave
+from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 import pygame
-import requests
-import sounddevice as sd
+
+try:
+    from health_monitor import HealthMonitor, HealthSnapshot
+except ImportError:
+    from robot.health_monitor import HealthMonitor, HealthSnapshot
 
 
 VOICE_ID = "PoHUWWWMHFrA8z7Q88pu"
 ELEVEN_SAMPLE_RATE = 22050
-MIC_SAMPLE_RATE = 16000
-GROQ_CHAT_MODEL = "llama-3.3-70b-versatile"
-GROQ_STT_MODEL = "whisper-large-v3-turbo"
 WINDOW_WIDTH = 1000
 WINDOW_HEIGHT = 700
 BACKGROUND_COLOR = (173, 216, 230)  # light blue
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
-ALLOWED_FACES = {
-    "anxious",
-    "content",
-    "defeated",
-    "feisty",
-    "frustrated",
-    "gasping",
-    "kissing",
-    "laughing",
-    "nervous",
-    "relaxed",
-    "sad",
-    "shocked",
-    "sweet",
-    "teasing",
-    "thrilled",
-    "unimpressed",
-    "worried",
-    "yawning",
-}
-STOP_PHRASES = {
-    "quit",
-    "exit",
-    "stop",
-    "goodbye",
-    "bye",
-    "end conversation",
-    "stop listening",
+
+COACHING_INTERVAL_SECONDS = 60
+ENABLE_COOLDOWN = False
+COOLDOWN_SECONDS = 10 * 60
+ENABLE_USER_VOICE_CHAT = False
+SPEAKING_FACE_SWITCH_SECONDS = 0.30
+ENABLE_HEALTHY_CHECKINS = True
+HEALTHY_CHECKIN_EVERY_N_CHECKS = 2
+ENABLE_RANDOM_OUTBURSTS = True
+OUTBURST_MIN_SECONDS = 25
+OUTBURST_MAX_SECONDS = 50
+
+
+@dataclass
+class CoachingDecision:
+    category: str
+    message: str
+    face: str
+
+
+COACHING_MESSAGES: dict[str, list[str]] = {
+    "fatigue_high": [
+        "Nah, you are running on 2 percent battery right now. One minute reset: stand up, water, deep breath.",
+        "Eyes are low key cooked. Quick pit stop, then we lock back in.",
+        "Fatigue check is yelling at me. Take sixty seconds off screen before your brain starts buffering.",
+    ],
+    "eye_strain": [
+        "Your eyes are begging for a break. Look far away for twenty seconds, then do a slow blink set.",
+        "Screen time is winning. Micro eye break right now, no debate.",
+        "Vision patch note: blink slow, look across the room, then come back.",
+    ],
+    "posture_major": [
+        "Respectfully, your back is in banana mode. Sit tall, shoulders back, chin neutral.",
+        "Your spine just dropped an emergency ping. Stack head over shoulders and reset the chair posture.",
+        "You are full shrimp right now. Un-shrimp immediately and stand on business.",
+    ],
+    "posture_minor": [
+        "Tiny posture drift detected. Small reset and you are golden.",
+        "Quick fix: shoulders back, jaw unclench, neck long.",
+        "You are almost perfect. Mini posture patch and keep cooking.",
+    ],
+    "mixed": [
+        "Combo move unlocked: slouch plus eye strain. One minute reset and we bounce back.",
+        "Back and eyes are both filing complaints. Hydrate, posture reset, and blink refresh.",
+        "You are in goblin mode right now. Sit tall, drink water, and do a quick visual break.",
+    ],
+    "healthy_checkin": [
+        "Okayyy posture is clean and eyes are stable. We love to see it.",
+        "Health metrics are low key immaculate right now.",
+        "No notes. Keep this up and your future self owes you one.",
+        "You are locked in. Certified non-banana posture.",
+    ],
 }
 
-SILENCE_SECONDS_TO_STOP = 2.0
-MIN_SPEECH_SECONDS = 0.2
-MAX_UTTERANCE_SECONDS = 25.0
-IDLE_TIMEOUT_SECONDS = 120.0
-MIC_BLOCK_SECONDS = 0.05
-MIC_NOISE_CALIBRATION_SECONDS = 0.6
-MIC_PRE_ROLL_SECONDS = 0.5
-MIC_MIN_START_THRESHOLD = 110.0
-MIC_MAX_START_THRESHOLD = 700.0
-MIC_START_MULTIPLIER = 2.6
-MIC_CONTINUE_MULTIPLIER = 1.8
-SPEAKING_FACE_SWITCH_SECONDS = 0.30
+IDLE_OUTBURSTS = [
+    "Quick vibe check: shoulders down, jaw unclenched, aura restored.",
+    "Hydration ping. Go take one sip like a responsible icon.",
+    "Posture audit in progress. Try not to become a lowercase h.",
+    "Blink tax is due. Pay it now.",
+    "Neck doing side quests again? Bring it back to center.",
+    "Reminder: we do not hunch in this household.",
+    "Tiny reset now saves you from random back pain later.",
+    "You are one ergonomic adjustment away from main character posture.",
+]
 
 
 def load_dotenv() -> None:
@@ -104,72 +127,11 @@ def load_face_images(faces_dir: Path) -> dict[str, pygame.Surface]:
     return images
 
 
-def choose_face_fallback(text: str) -> str:
-    lowered = text.lower()
-    keyword_map = [
-        ("laughing", ["haha", "lol", "laugh", "funny", "hilarious", "joke"]),
-        ("thrilled", ["amazing", "awesome", "great", "fantastic", "excited", "love"]),
-        ("sweet", ["thanks", "thank you", "appreciate", "glad", "happy"]),
-        ("sad", ["sad", "sorry", "unfortunately", "grief", "upset"]),
-        ("worried", ["worry", "concern", "careful", "risk", "danger"]),
-        ("frustrated", ["can't", "cannot", "error", "issue", "problem", "stuck"]),
-        ("shocked", ["wow", "unbelievable", "surprising", "shocked"]),
-        ("teasing", ["tease", "playful", "just kidding"]),
-        ("yawning", ["tired", "sleepy", "rest", "exhausted"]),
-    ]
-    for face, keywords in keyword_map:
-        if any(word in lowered for word in keywords):
-            return face
-    return "content"
-
-
-def classify_user_face_with_groq(user_text: str, groq_api_key: str) -> str:
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {groq_api_key}",
-        "Content-Type": "application/json",
-    }
-    face_list = ", ".join(sorted(ALLOWED_FACES))
-    payload = {
-        "model": GROQ_CHAT_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Return ONLY valid JSON with one key: 'face'. "
-                    f"'face' must be exactly one of: {face_list}."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Pick the best face for this user utterance:\n{user_text}",
-            },
-        ],
-        "temperature": 0.0,
-        "max_tokens": 30,
-        "response_format": {"type": "json_object"},
-    }
-
-    response = requests.post(url, headers=headers, json=payload, timeout=30)
-    if response.status_code >= 400:
-        return choose_face_fallback(user_text)
-
-    try:
-        content = response.json()["choices"][0]["message"]["content"].strip()
-        face = str(json.loads(content).get("face", "")).strip().lower()
-        if face in ALLOWED_FACES:
-            return face
-    except (KeyError, IndexError, TypeError, json.JSONDecodeError):
-        pass
-
-    return choose_face_fallback(user_text)
-
-
 class FaceDisplay:
     def __init__(self, faces_dir: Path):
         pygame.init()
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-        pygame.display.set_caption("Robot Face")
+        pygame.display.set_caption("Health Buddy")
         self.clock = pygame.time.Clock()
         self.faces = load_face_images(faces_dir)
         self.current_face = "sweet" if "sweet" in self.faces else next(iter(self.faces))
@@ -208,6 +170,8 @@ class FaceDisplay:
     def set_face(self, face_name: str) -> None:
         if face_name not in self.faces:
             face_name = "content" if "content" in self.faces else self.current_face
+        if face_name == self.current_face:
+            return
         self.current_face = face_name
         self.draw()
 
@@ -252,154 +216,9 @@ class FaceDisplay:
             import winsound
 
             winsound.PlaySound(path, winsound.SND_FILENAME)
-        else:
-            print(f"Audio generated at: {path}")
 
     def close(self) -> None:
         pygame.quit()
-
-
-def record_user_audio_until_silence(face_display: FaceDisplay) -> str | None:
-    block_size = int(MIC_SAMPLE_RATE * MIC_BLOCK_SECONDS)
-    silence_chunks_to_stop = max(1, int(SILENCE_SECONDS_TO_STOP / MIC_BLOCK_SECONDS))
-    min_speech_chunks = max(1, int(MIN_SPEECH_SECONDS / MIC_BLOCK_SECONDS))
-    max_chunks = max(1, int(MAX_UTTERANCE_SECONDS / MIC_BLOCK_SECONDS))
-    idle_timeout_chunks = max(1, int(IDLE_TIMEOUT_SECONDS / MIC_BLOCK_SECONDS))
-    calibration_chunks = max(1, int(MIC_NOISE_CALIBRATION_SECONDS / MIC_BLOCK_SECONDS))
-    pre_roll_limit = max(1, int(MIC_PRE_ROLL_SECONDS / MIC_BLOCK_SECONDS))
-
-    collected: list[np.ndarray] = []
-    pre_roll: list[np.ndarray] = []
-    speech_streak = 0
-    silence_chunks = 0
-    speech_started = False
-    chunk_count = 0
-    noise_rms_values: list[float] = []
-
-    face_display.set_face("sweet")
-    print("\nListening... (auto-detecting when you finish)")
-
-    with sd.InputStream(
-        samplerate=MIC_SAMPLE_RATE,
-        channels=1,
-        dtype="int16",
-        blocksize=block_size,
-    ) as stream:
-        while True:
-            if not face_display.handle_events():
-                raise KeyboardInterrupt("Face window closed")
-
-            audio_chunk, _ = stream.read(block_size)
-            chunk_count += 1
-
-            float_chunk = audio_chunk.astype(np.float32)
-            rms = float(np.sqrt(np.mean(np.square(float_chunk))))
-            if not speech_started:
-                noise_rms_values.append(rms)
-                if len(noise_rms_values) > calibration_chunks:
-                    noise_rms_values.pop(0)
-
-            noise_floor = (
-                float(np.percentile(noise_rms_values, 60))
-                if noise_rms_values
-                else 0.0
-            )
-            start_threshold = min(
-                MIC_MAX_START_THRESHOLD,
-                max(MIC_MIN_START_THRESHOLD, noise_floor * MIC_START_MULTIPLIER),
-            )
-            continue_threshold = max(
-                MIC_MIN_START_THRESHOLD * 0.65,
-                noise_floor * MIC_CONTINUE_MULTIPLIER,
-            )
-
-            if not speech_started:
-                pre_roll.append(audio_chunk.copy())
-                if len(pre_roll) > pre_roll_limit:
-                    pre_roll.pop(0)
-
-                if rms >= start_threshold:
-                    speech_streak += 1
-                else:
-                    speech_streak = 0
-
-                if speech_streak >= min_speech_chunks:
-                    speech_started = True
-                    collected.extend(pre_roll)
-                    silence_chunks = 0
-                elif chunk_count >= idle_timeout_chunks:
-                    return None
-            else:
-                collected.append(audio_chunk.copy())
-                if rms >= continue_threshold:
-                    silence_chunks = 0
-                else:
-                    silence_chunks += 1
-
-                if silence_chunks >= silence_chunks_to_stop:
-                    break
-                if len(collected) >= max_chunks:
-                    break
-
-            face_display.clock.tick(60)
-
-    if not speech_started or not collected:
-        return None
-
-    audio_data = np.concatenate(collected, axis=0).astype(np.int16)
-    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    temp_file.close()
-
-    with wave.open(temp_file.name, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(MIC_SAMPLE_RATE)
-        wav_file.writeframes(audio_data.tobytes())
-
-    return temp_file.name
-
-
-def transcribe_with_groq(audio_path: str, groq_api_key: str) -> str:
-    url = "https://api.groq.com/openai/v1/audio/transcriptions"
-    headers = {"Authorization": f"Bearer {groq_api_key}"}
-
-    with open(audio_path, "rb") as f:
-        files = {"file": (Path(audio_path).name, f, "audio/wav")}
-        data = {
-            "model": GROQ_STT_MODEL,
-            "temperature": "0",
-            "response_format": "json",
-            "language": "en",
-        }
-        response = requests.post(url, headers=headers, data=data, files=files, timeout=60)
-
-    if response.status_code >= 400:
-        raise RuntimeError(f"Groq STT failed ({response.status_code}): {response.text}")
-
-    return response.json().get("text", "").strip()
-
-
-def chat_with_groq(messages: list[dict[str, str]], groq_api_key: str) -> str:
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {groq_api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": GROQ_CHAT_MODEL,
-        "messages": messages,
-        "temperature": 0.6,
-        "max_tokens": 300,
-    }
-
-    response = requests.post(url, headers=headers, json=payload, timeout=60)
-    if response.status_code >= 400:
-        raise RuntimeError(f"Groq chat failed ({response.status_code}): {response.text}")
-
-    try:
-        return response.json()["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError(f"Unexpected Groq chat response: {response.text}") from exc
 
 
 def synthesize_pcm(eleven_api_key: str, voice_id: str, text: str) -> bytes:
@@ -443,95 +262,227 @@ def write_wav(pcm_data: bytes, sample_rate: int = ELEVEN_SAMPLE_RATE) -> str:
     return temp_file.name
 
 
-def should_stop_from_text(text: str) -> bool:
-    lowered = text.strip().lower()
-    if not lowered:
-        return False
-    if lowered in STOP_PHRASES:
-        return True
-    return any(phrase in lowered for phrase in STOP_PHRASES)
+def choose_idle_face(snapshot: HealthSnapshot) -> str:
+    if snapshot.error:
+        return "frustrated"
+    if not snapshot.monitoring_ready:
+        return "content"
+    if snapshot.max_closure_seconds_60s >= 2.0:
+        return "yawning"
+    if snapshot.bad_posture_ratio_60s >= 0.55:
+        return "worried"
+    if snapshot.posture_prediction == "bad":
+        return "unimpressed"
+    return "sweet"
+
+
+def _pick_varied_message(category: str, last_message: str | None) -> str:
+    choices = COACHING_MESSAGES[category]
+    if last_message and len(choices) > 1:
+        filtered = [msg for msg in choices if msg != last_message]
+        if filtered:
+            choices = filtered
+    return random.choice(choices)
+
+
+def build_coaching_decision(
+    snapshot: HealthSnapshot,
+    last_category: str | None,
+    last_message: str | None,
+    coaching_check_count: int,
+) -> CoachingDecision | None:
+    if snapshot.error or not snapshot.monitoring_ready:
+        return None
+
+    posture_major = snapshot.bad_posture_seconds_60s >= 35
+    posture_minor = snapshot.bad_posture_seconds_60s >= 20 and snapshot.posture_prediction == "bad"
+    fatigue_high = snapshot.max_closure_seconds_60s >= 3.0 or snapshot.long_closure_count_60s >= 2
+    eye_strain = snapshot.max_closure_seconds_60s >= 1.5 or snapshot.long_closure_count_60s >= 1
+
+    candidate_categories: list[str] = []
+    if posture_major and eye_strain:
+        candidate_categories.append("mixed")
+    if fatigue_high:
+        candidate_categories.append("fatigue_high")
+    if posture_major:
+        candidate_categories.append("posture_major")
+    if eye_strain:
+        candidate_categories.append("eye_strain")
+    if posture_minor:
+        candidate_categories.append("posture_minor")
+
+    if not candidate_categories:
+        if ENABLE_HEALTHY_CHECKINS and coaching_check_count % max(1, HEALTHY_CHECKIN_EVERY_N_CHECKS) == 0:
+            category = "healthy_checkin"
+            message = _pick_varied_message(category, last_message)
+            return CoachingDecision(category=category, message=message, face="thrilled")
+        return None
+
+    # Keep priority ordering, but avoid repeating the same category when alternatives exist.
+    category = candidate_categories[0]
+    if category == last_category and len(candidate_categories) > 1:
+        category = candidate_categories[1]
+
+    face_by_category = {
+        "mixed": "feisty",
+        "fatigue_high": "yawning",
+        "eye_strain": "worried",
+        "posture_major": "unimpressed",
+        "posture_minor": "teasing",
+    }
+    message = _pick_varied_message(category, last_message)
+    face = face_by_category.get(category, "sweet")
+
+    return CoachingDecision(category=category, message=message, face=face)
+
+
+def speak_coaching(face_display: FaceDisplay, eleven_api_key: str, decision: CoachingDecision) -> None:
+    wav_path = None
+    try:
+        face_display.hold_face(decision.face, 1.2)
+        pcm_data = synthesize_pcm(eleven_api_key, VOICE_ID, decision.message)
+        wav_path = write_wav(pcm_data)
+        face_display.play_wav(wav_path, talk_faces=["sweet", "laughing"])
+        face_display.set_face("sweet")
+    finally:
+        if wav_path:
+            try:
+                Path(wav_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def speak_message(face_display: FaceDisplay, eleven_api_key: str, message: str, face: str) -> None:
+    speak_coaching(face_display, eleven_api_key, CoachingDecision(category="system", message=message, face=face))
+
+
+def maybe_run_user_voice_chat() -> None:
+    # Future hook: when ENABLE_USER_VOICE_CHAT is True, this is where
+    # user->robot conversational voice flow (STT + LLM + TTS) should run.
+    if not ENABLE_USER_VOICE_CHAT:
+        return
+
+
+def maybe_random_outburst(
+    face_display: FaceDisplay,
+    eleven_api_key: str,
+    snapshot: HealthSnapshot,
+    now: float,
+    next_outburst_at: float,
+) -> float:
+    if not ENABLE_RANDOM_OUTBURSTS:
+        return now + random.uniform(OUTBURST_MIN_SECONDS, OUTBURST_MAX_SECONDS)
+    if not snapshot.monitoring_ready or snapshot.error:
+        return next_outburst_at
+    if now < next_outburst_at:
+        return next_outburst_at
+
+    message = random.choice(IDLE_OUTBURSTS)
+    speak_message(face_display, eleven_api_key, message, "teasing")
+    return now + random.uniform(OUTBURST_MIN_SECONDS, OUTBURST_MAX_SECONDS)
 
 
 def main() -> None:
     load_dotenv()
     eleven_api_key = get_required_env("ELEVEN_LABS_API_KEY")
-    groq_api_key = get_required_env("GROQ_API_KEY")
+
+    project_root = Path(__file__).resolve().parent.parent
     faces_dir = Path(__file__).resolve().parent / "faces"
+
     face_display = FaceDisplay(faces_dir)
+    health_monitor = HealthMonitor(project_root)
+    health_monitor.start()
 
-    print("Voice chat ready.")
-    print("Always listening with auto end-of-speech detection.")
-    print("Say 'quit', 'exit', or 'goodbye' to stop.")
+    print("Health buddy started.")
+    print("Primary mode: proactive health coaching from posture + eye metrics.")
+    print("Coaching check interval: 60 seconds.")
+    print(f"User voice chat enabled: {ENABLE_USER_VOICE_CHAT}")
+    print("Press ESC or close the face window to stop.")
 
-    messages: list[dict[str, str]] = [
-        {
-            "role": "system",
-            "content": (
-                "You are a friendly voice assistant. Keep responses concise, natural, "
-                "and easy to speak out loud."
-            ),
-        }
-    ]
+    last_coaching_check = 0.0
+    last_coaching_spoken = 0.0
+    last_status_print = 0.0
+    coaching_check_count = 0
+    last_coaching_category: str | None = None
+    last_coaching_message: str | None = None
+    announced_calibrating = False
+    announced_ready = False
+    next_outburst_at = time.time() + random.uniform(OUTBURST_MIN_SECONDS, OUTBURST_MAX_SECONDS)
 
-    while True:
-        if not face_display.handle_events():
-            print("Face window closed. Exiting.")
-            break
+    try:
+        while face_display.handle_events():
+            now = time.time()
+            snapshot = health_monitor.get_snapshot()
 
-        audio_path = None
-        wav_path = None
-        try:
-            audio_path = record_user_audio_until_silence(face_display)
-            if not audio_path:
-                face_display.set_face("sweet")
-                continue
+            face_display.set_face(choose_idle_face(snapshot))
 
-            face_display.set_face("content")
-            user_text = transcribe_with_groq(audio_path, groq_api_key)
-            if not user_text:
-                face_display.set_face("gasping")
-                print("I didn't catch that. Listening again...")
-                face_display.set_face("sweet")
-                continue
+            if now - last_status_print >= 10:
+                print(
+                    "Health status:",
+                    f"{snapshot.status}",
+                    f"posture={snapshot.posture_prediction}",
+                    f"bad60s={snapshot.bad_posture_seconds_60s:.0f}s",
+                    f"longEyeClosures={snapshot.long_closure_count_60s}",
+                    f"maxClosure={snapshot.max_closure_seconds_60s:.1f}s",
+                )
+                if snapshot.error:
+                    print(f"Monitor error: {snapshot.error}")
+                last_status_print = now
 
-            print(f"You: {user_text}")
-            if should_stop_from_text(user_text):
-                print("Stopping voice chat. Goodbye.")
-                break
+            if not announced_calibrating and not snapshot.monitoring_ready and not snapshot.error:
+                speak_message(
+                    face_display,
+                    eleven_api_key,
+                    "Yo, quick setup. I am calibrating posture and eye tracking. Stay in frame for a few seconds.",
+                    "content",
+                )
+                announced_calibrating = True
 
-            detected_user_face = classify_user_face_with_groq(user_text, groq_api_key)
-            face_display.hold_face(detected_user_face, 1.5)
+            if snapshot.monitoring_ready and not announced_ready:
+                print("Calibration complete.")
+                speak_message(
+                    face_display,
+                    eleven_api_key,
+                    "Calibration done. We are live now, health tracking is fully online.",
+                    "thrilled",
+                )
+                announced_ready = True
 
-            messages.append({"role": "user", "content": user_text})
-            face_display.set_face("content")
-            assistant_text = chat_with_groq(messages, groq_api_key)
-            messages.append({"role": "assistant", "content": assistant_text})
-            print(f"Assistant: {assistant_text}")
+            if now - last_coaching_check >= COACHING_INTERVAL_SECONDS:
+                last_coaching_check = now
+                coaching_check_count += 1
+                decision = build_coaching_decision(
+                    snapshot,
+                    last_coaching_category,
+                    last_coaching_message,
+                    coaching_check_count,
+                )
+                if decision:
+                    cooldown_ok = (not ENABLE_COOLDOWN) or (
+                        now - last_coaching_spoken >= COOLDOWN_SECONDS
+                    )
+                    if cooldown_ok:
+                        print(f"Coaching [{decision.category}]: {decision.message}")
+                        speak_coaching(face_display, eleven_api_key, decision)
+                        last_coaching_spoken = now
+                        last_coaching_category = decision.category
+                        last_coaching_message = decision.message
 
-            face_display.set_face("content")
-            pcm_data = synthesize_pcm(eleven_api_key, VOICE_ID, assistant_text)
-            wav_path = write_wav(pcm_data)
-            face_display.play_wav(wav_path, talk_faces=["sweet", "laughing"])
-            face_display.set_face("sweet")
-        except KeyboardInterrupt:
-            print("\nStopped by keyboard interrupt.")
-            break
-        except Exception as exc:
-            face_display.set_face("frustrated")
-            print(f"Loop error: {exc}")
-            print("Continuing...")
-            time.sleep(0.5)
-            face_display.set_face("sweet")
-        finally:
-            try:
-                if audio_path:
-                    Path(audio_path).unlink(missing_ok=True)
-                if wav_path:
-                    Path(wav_path).unlink(missing_ok=True)
-            except OSError:
-                pass
+            next_outburst_at = maybe_random_outburst(
+                face_display,
+                eleven_api_key,
+                snapshot,
+                now,
+                next_outburst_at,
+            )
 
-    face_display.close()
+            maybe_run_user_voice_chat()
+            face_display.clock.tick(30)
+    except KeyboardInterrupt:
+        print("\nStopped by keyboard interrupt.")
+    finally:
+        health_monitor.stop()
+        face_display.close()
 
 
 if __name__ == "__main__":

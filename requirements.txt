@@ -7,3 +7,5 @@ pyttsx3
 pygame
 requests
 sounddevice
+joblib
+scikit-learn
