@@ -3,8 +3,9 @@ mediapipe
 numpy
 scipy
 imutils
-<<<<<<< HEAD
-opencv-python
-=======
 pyttsx3
->>>>>>> e1bec0f (added face animation states)
+pygame
+requests
+sounddevice
+joblib
+scikit-learn

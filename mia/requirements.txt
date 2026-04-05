@@ -1,3 +1,0 @@
-mediapipe
-joblib
-scikit-learn
