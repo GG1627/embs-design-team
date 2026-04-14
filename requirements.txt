@@ -9,3 +9,4 @@ requests
 sounddevice
 joblib
 scikit-learn
+bleak
