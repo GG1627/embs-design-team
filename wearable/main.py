@@ -39,7 +39,7 @@ async def main():
     print(f"Scanning for ESP32 at {TARGET_MAC}...")
     
     # 1. Automatically find the ESP32 by its exact MAC address
-    device = await BleakScanner.find_device_by_address(TARGET_MAC, timeout=10.0)
+    device = await BleakScanner.find_device_by_address(TARGET_MAC, timeout=20.0)
     
     if device is None:
         print(f"Could not find ESP32 at {TARGET_MAC}. Make sure it is powered on.")
