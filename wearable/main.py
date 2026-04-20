@@ -2,8 +2,9 @@ import asyncio
 import struct
 from bleak import BleakScanner, BleakClient
 
-# The name we set in BLEDevice::init()
-DEVICE_NAME = "BioMonitor"
+# --- CONFIGURATION ---
+# The exact MAC address of the ESP32 from the scanner
+TARGET_MAC = "40:22:D8:75:0F:2A"
 
 # The UUIDs from your ESP32 code
 HR_UUID = "12345678-1234-1234-1234-123456789a01"
@@ -11,15 +12,13 @@ SPO2_UUID = "12345678-1234-1234-1234-123456789a02"
 HRV_UUID = "12345678-1234-1234-1234-123456789a03"
 TEMP_UUID = "12345678-1234-1234-1234-123456789a04"
 
-# Callbacks to handle incoming data from the ESP32
+# --- CALLBACK HANDLERS ---
 def hr_handler(sender, data):
-    # Unpack 2 bytes as a little-endian unsigned integer
     heart_rate = struct.unpack("<H", data)[0]
     if heart_rate > 0:
         print(f"Heart Rate: {heart_rate} BPM")
 
 def spo2_handler(sender, data):
-    # Unpack 4 bytes as a little-endian float
     spo2 = struct.unpack("<f", data)[0]
     if spo2 > 0:
         print(f"SpO2:       {spo2:.1f} %")
@@ -30,21 +29,23 @@ def hrv_handler(sender, data):
         print(f"HRV:        {hrv:.1f} ms")
 
 def temp_handler(sender, data):
-    temp_c = struct.unpack("<f", data)[0]
-    temp_f = temp_c * 9.0 / 5.0 + 32.0
-    print(f"Skin Temp:  {temp_c:.2f} C / {temp_f:.2f} F\n")
+    # Unpack as a 2-byte unsigned integer and divide by 100
+    raw_temp = struct.unpack("<H", data)[0]
+    temp_f = raw_temp / 100.0
+    print(f"Skin Temp:  {temp_f:.2f} F\n")
 
+# --- MAIN BLUETOOTH LOOP ---
 async def main():
-    print(f"Scanning for {DEVICE_NAME}...")
+    print(f"Scanning for ESP32 at {TARGET_MAC}...")
     
-    # 1. Automatically find the ESP32 by its broadcast name
-    device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=10.0)
+    # 1. Automatically find the ESP32 by its exact MAC address
+    device = await BleakScanner.find_device_by_address(TARGET_MAC, timeout=10.0)
     
     if device is None:
-        print(f"Could not find {DEVICE_NAME}. Make sure it is powered on.")
+        print(f"Could not find ESP32 at {TARGET_MAC}. Make sure it is powered on.")
         return
 
-    print(f"Found {DEVICE_NAME} at {device.address}! Connecting...")
+    print(f"Found ESP32! Connecting...")
 
     # 2. Connect to the device
     async with BleakClient(device) as client:
@@ -56,7 +57,7 @@ async def main():
         await client.start_notify(HRV_UUID, hrv_handler)
         await client.start_notify(TEMP_UUID, temp_handler)
         
-        print("Listening for biometric data. Press Ctrl+C to stop.")
+        print("Listening for biometric data. Press Ctrl+C to stop.\n" + "-"*40)
         
         # Keep the script running to listen for incoming BLE packets
         while True:
