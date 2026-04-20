@@ -39,7 +39,7 @@ async def main():
     print(f"Scanning for ESP32 at {TARGET_MAC}...")
     
     # 1. Automatically find the ESP32 by its exact MAC address
-    device = await BleakScanner.find_device_by_address(TARGET_MAC, timeout=20.0)
+    device = await BleakScanner.find_device_by_address(TARGET_MAC, timeout=30.0)
     
     if device is None:
         print(f"Could not find ESP32 at {TARGET_MAC}. Make sure it is powered on.")
@@ -50,12 +50,18 @@ async def main():
     # 2. Connect to the device
     async with BleakClient(device) as client:
         print("Connected successfully!\n")
+
+        await asyncio.sleep(2.0)  # Short delay to ensure connection is stable
         
         # 3. Subscribe to the notifications
         await client.start_notify(HR_UUID, hr_handler)
+        print("Subscribed to HR")
         await client.start_notify(SPO2_UUID, spo2_handler)
+        print("Subscribed to SpO2")
         await client.start_notify(HRV_UUID, hrv_handler)
+        print("Subscribed to HRV")
         await client.start_notify(TEMP_UUID, temp_handler)
+        print("Subscribed to Temperature")
         
         print("Listening for biometric data. Press Ctrl+C to stop.\n" + "-"*40)
         
