@@ -56,16 +56,16 @@ async def main():
         # 3. Subscribe to the notifications
         await client.start_notify(HR_UUID, hr_handler)
         print("Subscribed to HR")
-        await asyncio.sleep(0.5)  # Short delay between subscriptions
+        await asyncio.sleep(1)  # Short delay between subscriptions
         await client.start_notify(SPO2_UUID, spo2_handler)
         print("Subscribed to SpO2")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1)
         await client.start_notify(HRV_UUID, hrv_handler)
         print("Subscribed to HRV")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1)
         await client.start_notify(TEMP_UUID, temp_handler)
         print("Subscribed to Temperature")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1)
         
         print("Listening for biometric data. Press Ctrl+C to stop.\n" + "-"*40)
         
