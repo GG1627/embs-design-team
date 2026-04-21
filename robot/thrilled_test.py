@@ -3,8 +3,8 @@ from pathlib import Path
 import pygame
 
 
-WINDOW_WIDTH = 1000
-WINDOW_HEIGHT = 700
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 460
 BACKGROUND_COLOR = (227, 227, 227)
 
 
