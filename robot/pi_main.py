@@ -427,7 +427,7 @@ def main() -> None:
     print("Health buddy started (Raspberry Pi mode).")
     print("Primary mode: proactive health coaching from posture + eye metrics.")
     print("Camera backend: Picamera2 preferred, OpenCV fallback.")
-    print("Hailo accelerator: detected and reported by pi_health_monitor.")
+    print("Accelerator mode: CPU-only (no Hailo required).")
     print("Coaching check interval: 60 seconds.")
     print(f"User voice chat enabled: {ENABLE_USER_VOICE_CHAT}")
     print("Press ESC or close the face window to stop.")

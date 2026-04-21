@@ -1,7 +1,5 @@
 import argparse
 import logging
-import shutil
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -97,43 +95,10 @@ def setup_logging() -> Path:
     return log_path
 
 
-def check_hailo() -> tuple[bool, str]:
-    import_ok = False
-    runtime_msg = "hailo_runtime_not_detected"
-    try:
-        import hailo_platform  # type: ignore  # noqa: F401
-
-        import_ok = True
-        runtime_msg = "hailo_runtime_detected"
-        LOGGER.info("Hailo runtime import: OK")
-    except Exception as exc:
-        LOGGER.warning("Hailo runtime import failed: %s", exc)
-
-    cli_path = shutil.which("hailortcli")
-    if not cli_path:
-        LOGGER.warning("hailortcli not found in PATH.")
-        return import_ok, runtime_msg
-
-    try:
-        result = subprocess.run(
-            [cli_path, "scan"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-        output = (result.stdout or "") + (result.stderr or "")
-        if result.returncode == 0:
-            LOGGER.info("hailortcli scan succeeded.")
-            LOGGER.info("hailortcli output: %s", output.strip() or "<empty>")
-            if "device" in output.lower() or "hailo" in output.lower():
-                return True, "hailo_runtime_detected_device_visible"
-        else:
-            LOGGER.warning("hailortcli scan failed (code=%s): %s", result.returncode, output.strip())
-    except Exception as exc:
-        LOGGER.warning("hailortcli scan exception: %s", exc)
-
-    return import_ok, runtime_msg
+def accelerator_mode() -> str:
+    mode = "cpu_only"
+    LOGGER.info("Accelerator mode: %s (Hailo checks skipped)", mode)
+    return mode
 
 
 def run_camera_test(duration_sec: float) -> tuple[bool, str, int, float]:
@@ -166,14 +131,14 @@ def run_camera_test(duration_sec: float) -> tuple[bool, str, int, float]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Raspberry Pi camera + Hailo quick smoke test.")
+    parser = argparse.ArgumentParser(description="Raspberry Pi camera quick smoke test (CPU-only mode).")
     parser.add_argument("--duration", type=float, default=4.0, help="Camera test duration in seconds.")
     args = parser.parse_args()
 
     log_path = setup_logging()
     LOGGER.info("Starting quick test (duration=%.1fs)", args.duration)
 
-    accel_ok, accel_status = check_hailo()
+    accel_status = accelerator_mode()
     cam_ok = False
     camera_backend = "none"
     frames = 0
@@ -185,14 +150,14 @@ def main() -> int:
         LOGGER.exception("Camera test crashed: %s", exc)
 
     LOGGER.info("Summary: camera_ok=%s backend=%s frames=%s fps=%.1f", cam_ok, camera_backend, frames, fps)
-    LOGGER.info("Summary: accelerator_ok=%s status=%s", accel_ok, accel_status)
+    LOGGER.info("Summary: accelerator_status=%s", accel_status)
     LOGGER.info("Log file: %s", log_path)
 
-    if cam_ok and accel_ok:
-        LOGGER.info("PASS: camera and accelerator checks look good.")
+    if cam_ok:
+        LOGGER.info("PASS: camera check looks good (CPU-only mode).")
         return 0
 
-    LOGGER.error("FAIL: check log for camera/accelerator details.")
+    LOGGER.error("FAIL: check log for camera details.")
     return 1
 
 

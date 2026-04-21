@@ -102,7 +102,7 @@ class HealthSnapshot:
     latest_eye_closure_seconds: float
     status: str
     camera_backend: str = "unknown"
-    accelerator_status: str = "not_checked"
+    accelerator_status: str = "cpu_only"
     error: str | None = None
 
 
@@ -142,21 +142,14 @@ class HealthMonitor:
             latest_eye_closure_seconds=0.0,
             status="starting",
             camera_backend="unknown",
-            accelerator_status="not_checked",
+            accelerator_status="cpu_only",
             error=None,
         )
 
     @staticmethod
-    def _detect_hailo_status() -> str:
-        try:
-            # Works on Raspberry Pi images with Hailo runtime installed.
-            import hailo_platform  # type: ignore  # noqa: F401
-
-            LOGGER.info("Hailo runtime detected.")
-            return "hailo_runtime_detected"
-        except Exception:
-            LOGGER.warning("Hailo runtime not detected; continuing on CPU path.")
-            return "hailo_runtime_not_detected"
+    def _accelerator_status() -> str:
+        LOGGER.info("Accelerator mode: cpu_only (Hailo checks disabled).")
+        return "cpu_only"
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -205,7 +198,7 @@ class HealthMonitor:
             LOGGER.info("Loaded posture model: %s", self.pose_model_path)
             frame_source = FrameSource(width=1280, height=720, fps=30)
             frame_source.open()
-            accelerator_status = self._detect_hailo_status()
+            accelerator_status = self._accelerator_status()
             self._set_state(
                 camera_backend=frame_source.backend,
                 accelerator_status=accelerator_status,
