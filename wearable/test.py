@@ -19,8 +19,10 @@ async def main():
     async with BleakClient(device, timeout=30.0) as client:
         print("Connected:", client.is_connected)
 
-        await client.get_services()
-        print("Services discovered")
+        services = client.services
+        print("Service discovery done")
+        for service in services:
+            print("Service:", service.uuid)
 
         await client.start_notify(UART_TX_UUID, handle_notify)
         print("Notifications enabled")
