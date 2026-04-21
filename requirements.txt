@@ -10,3 +10,4 @@ sounddevice
 joblib
 scikit-learn
 bleak
+pyserial
