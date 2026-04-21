@@ -32,7 +32,6 @@ Thumbs.db
 *.log
 
 # Model / Data files
-*.pkl
 *.h5
 *.pt
 *.onnx
