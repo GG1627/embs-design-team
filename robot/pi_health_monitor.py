@@ -6,8 +6,8 @@ import warnings
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
+import cv2
 import joblib
 # Reduce non-critical native logs before importing MediaPipe/TFLite.
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
@@ -21,76 +21,34 @@ LOGGER = logging.getLogger("robot.pi_health_monitor")
 
 
 class FrameSource:
-    """Pi-first camera abstraction: Picamera2 when available, OpenCV fallback."""
+    """OpenCV camera source for libcamerify-based Pi camera access."""
 
     def __init__(self, width: int = 1280, height: int = 720, fps: int = 30):
         self.width = width
         self.height = height
         self.fps = fps
-        self.backend = "none"
-        self._picam: Any = None
-        self._cap: Any = None
-        self._cv2: Any = None
+        self.backend = "opencv"
+        self._cap: cv2.VideoCapture | None = None
 
     def open(self) -> None:
-        try:
-            from picamera2 import Picamera2  # type: ignore
-
-            self._picam = Picamera2()
-            config = self._picam.create_preview_configuration(
-                main={"size": (self.width, self.height), "format": "RGB888"},
-                controls={"FrameRate": self.fps},
-            )
-            self._picam.configure(config)
-            self._picam.start()
-            time.sleep(0.2)
-            self.backend = "picamera2"
-            LOGGER.info("Camera backend selected: picamera2 (%sx%s @ %sfps)", self.width, self.height, self.fps)
-            return
-        except Exception as exc:
-            LOGGER.warning("Picamera2 backend unavailable, falling back to OpenCV: %s", exc)
-            self._picam = None
-
-        try:
-            import cv2  # type: ignore
-
-            self._cv2 = cv2
-        except Exception as exc:
-            raise RuntimeError(
-                "Picamera2 unavailable and OpenCV fallback is not installed. "
-                "Install python3-picamera2 or python3-opencv."
-            ) from exc
-
-        self._cap = self._cv2.VideoCapture(0)
+        self._cap = cv2.VideoCapture(0)
         if not self._cap.isOpened():
             raise RuntimeError(
-                "Could not open Pi camera. Install/configure Picamera2 or enable /dev/video0."
+                "Could not open /dev/video0 with OpenCV. "
+                "Run app with libcamerify: libcamerify python robot/pi_main.py"
             )
-        self.backend = "opencv"
-        LOGGER.info("Camera backend selected: opencv (/dev/video0)")
+        LOGGER.info("Camera backend selected: opencv (/dev/video0 via libcamerify recommended)")
 
     def read_rgb(self) -> np.ndarray | None:
-        if self.backend == "picamera2" and self._picam is not None:
-            frame = self._picam.capture_array()
-            if frame is None:
-                return None
-            return frame
-
         if self._cap is not None:
             ret, frame = self._cap.read()
             if not ret:
                 return None
-            return self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         return None
 
     def close(self) -> None:
-        if self._picam is not None:
-            try:
-                self._picam.stop()
-            except Exception:
-                pass
-            self._picam = None
         if self._cap is not None:
             self._cap.release()
             self._cap = None
