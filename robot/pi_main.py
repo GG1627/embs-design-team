@@ -21,8 +21,8 @@ except ImportError:
 
 VOICE_ID = "PoHUWWWMHFrA8z7Q88pu"
 ELEVEN_SAMPLE_RATE = 22050
-WINDOW_WIDTH = 1000
-WINDOW_HEIGHT = 700
+WINDOW_WIDTH = 700
+WINDOW_HEIGHT = 400
 BACKGROUND_COLOR = (173, 216, 230)  # light blue
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
 
