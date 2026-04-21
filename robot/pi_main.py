@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pygame
+import serial
 
 try:
     from pi_health_monitor import HealthMonitor, HealthSnapshot
@@ -21,9 +23,9 @@ except ImportError:
 
 VOICE_ID = "PoHUWWWMHFrA8z7Q88pu"
 ELEVEN_SAMPLE_RATE = 22050
-WINDOW_WIDTH = 700
-WINDOW_HEIGHT = 400
-BACKGROUND_COLOR = (237, 237, 237)  # light blue
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 460
+BACKGROUND_COLOR = (227, 227, 227)  # light blue
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
 
 COACHING_INTERVAL_SECONDS = 60
@@ -165,8 +167,10 @@ class FaceDisplay:
         self.clock = pygame.time.Clock()
         self.faces = load_face_images(faces_dir)
         self.current_face = "sweet" if "sweet" in self.faces else next(iter(self.faces))
+        self.heart_rate_bpm: str | None = None
         self.running = True
         self._scaled_cache: dict[tuple[str, int, int], pygame.Surface] = {}
+        self.font = pygame.font.SysFont(None, 32)
 
         try:
             pygame.mixer.init()
@@ -210,7 +214,23 @@ class FaceDisplay:
         image = self._scaled_image(self.current_face)
         rect = image.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
         self.screen.blit(image, rect)
+        self._draw_overlay()
         pygame.display.flip()
+
+    def _draw_overlay(self) -> None:
+        panel = pygame.Surface((170, 44), pygame.SRCALPHA)
+        panel.fill((255, 255, 255, 210))
+        self.screen.blit(panel, (14, 14))
+        hr_text = self.heart_rate_bpm if self.heart_rate_bpm else "--"
+        label = self.font.render(f"HR: {hr_text} bpm", True, (20, 20, 20))
+        self.screen.blit(label, (24, 24))
+
+    def set_heart_rate(self, hr_bpm: str | None) -> None:
+        value = (hr_bpm or "").strip() or None
+        if value == self.heart_rate_bpm:
+            return
+        self.heart_rate_bpm = value
+        self.draw()
 
     def hold_face(self, face_name: str, seconds: float) -> None:
         self.set_face(face_name)
@@ -249,6 +269,69 @@ class FaceDisplay:
 
     def close(self) -> None:
         pygame.quit()
+
+
+class WearableMonitor:
+    def __init__(self, port: str, baud: int):
+        self.port = port
+        self.baud = baud
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._latest_hr_bpm: str | None = None
+        self._last_error_log = 0.0
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        LOGGER.info("Wearable monitor started (port=%s baud=%s).", self.port, self.baud)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        LOGGER.info("Wearable monitor stopped.")
+
+    def latest_hr_bpm(self) -> str | None:
+        with self._lock:
+            return self._latest_hr_bpm
+
+    def _set_hr(self, value: str | None) -> None:
+        with self._lock:
+            self._latest_hr_bpm = value
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            ser = None
+            try:
+                ser = serial.Serial(self.port, self.baud, timeout=1)
+                time.sleep(1.5)
+                LOGGER.info("Wearable serial connected: %s @ %s", self.port, self.baud)
+                while not self._stop_event.is_set():
+                    line = ser.readline().decode(errors="ignore").strip()
+                    if not line or not line.startswith("DATA,"):
+                        continue
+                    parts = line.split(",")
+                    if len(parts) != 11:
+                        continue
+                    hr_bpm = parts[7].strip()
+                    self._set_hr(hr_bpm if hr_bpm else None)
+            except Exception as exc:
+                now = time.time()
+                if now - self._last_error_log > 5.0:
+                    LOGGER.warning("Wearable serial unavailable on %s: %s", self.port, exc)
+                    self._last_error_log = now
+                self._set_hr(None)
+                time.sleep(2.0)
+            finally:
+                if ser is not None:
+                    try:
+                        ser.close()
+                    except Exception:
+                        pass
 
 
 def synthesize_pcm(eleven_api_key: str, voice_id: str, text: str) -> bytes:
@@ -419,16 +502,21 @@ def main() -> None:
 
     project_root = Path(__file__).resolve().parent.parent
     faces_dir = Path(__file__).resolve().parent / "faces"
+    wearable_port = os.getenv("WEARABLE_SERIAL_PORT", "/dev/ttyUSB0")
+    wearable_baud = int(os.getenv("WEARABLE_BAUD", "115200"))
 
     face_display = FaceDisplay(faces_dir)
     health_monitor = HealthMonitor(project_root)
+    wearable_monitor = WearableMonitor(wearable_port, wearable_baud)
     health_monitor.start()
+    wearable_monitor.start()
 
     print("Health buddy started (Raspberry Pi mode).")
     print("Primary mode: proactive health coaching from posture + eye metrics.")
     print("Camera backend: OpenCV (/dev/video0). Use libcamerify on Pi camera modules.")
     print("Accelerator mode: CPU-only (no Hailo required).")
     print("Coaching check interval: 60 seconds.")
+    print(f"Wearable serial: {wearable_port} @ {wearable_baud}")
     print(f"User voice chat enabled: {ENABLE_USER_VOICE_CHAT}")
     print("Press ESC or close the face window to stop.")
     LOGGER.info("Pi app startup complete. Waiting for monitor readiness.")
@@ -447,8 +535,10 @@ def main() -> None:
         while face_display.handle_events():
             now = time.time()
             snapshot = health_monitor.get_snapshot()
+            hr_bpm = wearable_monitor.latest_hr_bpm()
 
             face_display.set_face(choose_idle_face(snapshot))
+            face_display.set_heart_rate(hr_bpm)
 
             if now - last_status_print >= 10:
                 print(
@@ -460,9 +550,10 @@ def main() -> None:
                     f"bad60s={snapshot.bad_posture_seconds_60s:.0f}s",
                     f"longEyeClosures={snapshot.long_closure_count_60s}",
                     f"maxClosure={snapshot.max_closure_seconds_60s:.1f}s",
+                    f"hr={hr_bpm or '--'}",
                 )
                 LOGGER.info(
-                    "Health status=%s camera=%s accel=%s posture=%s bad60s=%.0fs longEye=%s maxClosure=%.1fs",
+                    "Health status=%s camera=%s accel=%s posture=%s bad60s=%.0fs longEye=%s maxClosure=%.1fs hr=%s",
                     snapshot.status,
                     snapshot.camera_backend,
                     snapshot.accelerator_status,
@@ -470,6 +561,7 @@ def main() -> None:
                     snapshot.bad_posture_seconds_60s,
                     snapshot.long_closure_count_60s,
                     snapshot.max_closure_seconds_60s,
+                    hr_bpm or "--",
                 )
                 if snapshot.error:
                     print(f"Monitor error: {snapshot.error}")
@@ -535,6 +627,7 @@ def main() -> None:
         LOGGER.exception("Fatal exception in pi_main: %s", exc)
         raise
     finally:
+        wearable_monitor.stop()
         health_monitor.stop()
         face_display.close()
         LOGGER.info("Pi app shutdown complete.")
