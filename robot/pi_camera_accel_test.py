@@ -19,18 +19,28 @@ class FrameSource:
         self._cap: cv2.VideoCapture | None = None
 
     def open(self) -> None:
-        self._cap = cv2.VideoCapture(0)
+        self._cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
         if not self._cap.isOpened():
             raise RuntimeError(
                 "Failed to open /dev/video0 with OpenCV. "
                 "On Raspberry Pi Camera Module, run with: libcamerify python robot/pi_camera_accel_test.py"
             )
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.width))
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.height))
+        self._cap.set(cv2.CAP_PROP_FPS, float(self.fps))
+        self._cap.set(cv2.CAP_PROP_CONVERT_RGB, 1.0)
         LOGGER.info("Camera backend: opencv (/dev/video0 via libcamerify recommended)")
 
     def read_rgb(self) -> np.ndarray | None:
         if self._cap is not None:
-            ok, frame = self._cap.read()
+            try:
+                ok, frame = self._cap.read()
+            except cv2.error as exc:
+                LOGGER.warning("OpenCV read error from /dev/video0: %s", exc)
+                return None
             if not ok:
+                return None
+            if frame is None or frame.size == 0:
                 return None
             return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 

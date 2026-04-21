@@ -31,18 +31,28 @@ class FrameSource:
         self._cap: cv2.VideoCapture | None = None
 
     def open(self) -> None:
-        self._cap = cv2.VideoCapture(0)
+        self._cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
         if not self._cap.isOpened():
             raise RuntimeError(
                 "Could not open /dev/video0 with OpenCV. "
                 "Run app with libcamerify: libcamerify python robot/pi_main.py"
             )
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.width))
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.height))
+        self._cap.set(cv2.CAP_PROP_FPS, float(self.fps))
+        self._cap.set(cv2.CAP_PROP_CONVERT_RGB, 1.0)
         LOGGER.info("Camera backend selected: opencv (/dev/video0 via libcamerify recommended)")
 
     def read_rgb(self) -> np.ndarray | None:
         if self._cap is not None:
-            ret, frame = self._cap.read()
+            try:
+                ret, frame = self._cap.read()
+            except cv2.error as exc:
+                LOGGER.warning("OpenCV read error from /dev/video0: %s", exc)
+                return None
             if not ret:
+                return None
+            if frame is None or frame.size == 0:
                 return None
             return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
