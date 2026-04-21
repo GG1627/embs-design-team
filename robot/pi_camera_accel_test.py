@@ -2,7 +2,6 @@ import argparse
 import logging
 import time
 from pathlib import Path
-from typing import Any
 
 import cv2
 import numpy as np
@@ -16,40 +15,19 @@ class FrameSource:
         self.width = width
         self.height = height
         self.fps = fps
-        self.backend = "none"
-        self._picam: Any = None
+        self.backend = "opencv"
         self._cap: cv2.VideoCapture | None = None
 
     def open(self) -> None:
-        try:
-            from picamera2 import Picamera2  # type: ignore
-
-            self._picam = Picamera2()
-            config = self._picam.create_preview_configuration(
-                main={"size": (self.width, self.height), "format": "RGB888"},
-                controls={"FrameRate": self.fps},
-            )
-            self._picam.configure(config)
-            self._picam.start()
-            time.sleep(0.2)
-            self.backend = "picamera2"
-            LOGGER.info("Camera backend: picamera2 (%sx%s @ %sfps)", self.width, self.height, self.fps)
-            return
-        except Exception as exc:
-            LOGGER.warning("Picamera2 not available: %s", exc)
-            self._picam = None
-
         self._cap = cv2.VideoCapture(0)
         if not self._cap.isOpened():
-            raise RuntimeError("Failed to open camera with Picamera2 and OpenCV fallback.")
-        self.backend = "opencv"
-        LOGGER.info("Camera backend: opencv (/dev/video0 fallback)")
+            raise RuntimeError(
+                "Failed to open /dev/video0 with OpenCV. "
+                "On Raspberry Pi Camera Module, run with: libcamerify python robot/pi_camera_accel_test.py"
+            )
+        LOGGER.info("Camera backend: opencv (/dev/video0 via libcamerify recommended)")
 
     def read_rgb(self) -> np.ndarray | None:
-        if self.backend == "picamera2" and self._picam is not None:
-            frame = self._picam.capture_array()
-            return frame if frame is not None else None
-
         if self._cap is not None:
             ok, frame = self._cap.read()
             if not ok:
@@ -59,12 +37,6 @@ class FrameSource:
         return None
 
     def close(self) -> None:
-        if self._picam is not None:
-            try:
-                self._picam.stop()
-            except Exception:
-                pass
-            self._picam = None
         if self._cap is not None:
             self._cap.release()
             self._cap = None

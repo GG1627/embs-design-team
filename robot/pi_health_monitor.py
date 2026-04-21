@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import cv2
 import joblib
 # Reduce non-critical native logs before importing MediaPipe/TFLite.
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
@@ -30,7 +29,8 @@ class FrameSource:
         self.fps = fps
         self.backend = "none"
         self._picam: Any = None
-        self._cap: cv2.VideoCapture | None = None
+        self._cap: Any = None
+        self._cv2: Any = None
 
     def open(self) -> None:
         try:
@@ -51,7 +51,17 @@ class FrameSource:
             LOGGER.warning("Picamera2 backend unavailable, falling back to OpenCV: %s", exc)
             self._picam = None
 
-        self._cap = cv2.VideoCapture(0)
+        try:
+            import cv2  # type: ignore
+
+            self._cv2 = cv2
+        except Exception as exc:
+            raise RuntimeError(
+                "Picamera2 unavailable and OpenCV fallback is not installed. "
+                "Install python3-picamera2 or python3-opencv."
+            ) from exc
+
+        self._cap = self._cv2.VideoCapture(0)
         if not self._cap.isOpened():
             raise RuntimeError(
                 "Could not open Pi camera. Install/configure Picamera2 or enable /dev/video0."
@@ -70,7 +80,7 @@ class FrameSource:
             ret, frame = self._cap.read()
             if not ret:
                 return None
-            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            return self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)
 
         return None
 
@@ -266,7 +276,6 @@ class HealthMonitor:
                         time.sleep(0.1)
                         continue
 
-                    rgb = cv2.resize(rgb, (1280, 720))
                     h, w = rgb.shape[:2]
                     mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                     ts_ms = int((time.monotonic() - start_ts) * 1000)
