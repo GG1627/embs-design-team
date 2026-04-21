@@ -9,20 +9,25 @@ def handle_notify(sender, data):
     print("Notify:", data.decode(errors="ignore"))
 
 async def main():
-    device = await BleakScanner.find_device_by_address(ADDRESS, timeout=10.0)
-    if device is None:
+    print("Scanning...")
+    devices = await BleakScanner.discover(timeout=8.0)
+
+    target = None
+    for d in devices:
+        if d.address.upper() == ADDRESS:
+            target = d
+            break
+
+    if target is None:
         print("Could not find device")
         return
 
-    print("Found:", device.address, device.name)
+    print("Found:", target.address, target.name)
 
-    async with BleakClient(device, timeout=30.0) as client:
+    async with BleakClient(target, timeout=30.0) as client:
         print("Connected:", client.is_connected)
 
-        services = client.services
-        print("Service discovery done")
-        for service in services:
-            print("Service:", service.uuid)
+        print("Services object:", client.services)
 
         await client.start_notify(UART_TX_UUID, handle_notify)
         print("Notifications enabled")
