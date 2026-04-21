@@ -18,11 +18,16 @@ async def main():
 
     async with BleakClient(device, timeout=30.0) as client:
         print("Connected:", client.is_connected)
+
+        await client.get_services()
+        print("Services discovered")
+
         await client.start_notify(UART_TX_UUID, handle_notify)
-        await client.write_gatt_char(UART_RX_UUID, b"hello from pi")
+        print("Notifications enabled")
+
+        await client.write_gatt_char(UART_RX_UUID, b"hello from pi", response=False)
         print("Sent hello")
-        while True:
-            await asyncio.sleep(2)
-            await client.write_gatt_char(UART_RX_UUID, b"ping")
+
+        await asyncio.sleep(5)
 
 asyncio.run(main())
