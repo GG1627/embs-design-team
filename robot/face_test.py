@@ -4,8 +4,8 @@ import sys
 import pygame
 
 
-WINDOW_WIDTH = 1000
-WINDOW_HEIGHT = 700
+WINDOW_WIDTH = 700
+WINDOW_HEIGHT = 400
 BACKGROUND_COLOR = (173, 216, 230)  # light blue
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
 
