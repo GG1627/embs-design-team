@@ -18,6 +18,7 @@ This README is written as a team handoff document so every member can understand
 - [End-to-End Architecture](#end-to-end-architecture)
 - [Hardware Used](#hardware-used)
 - [Subsystem Ownership and Responsibilities](#subsystem-ownership-and-responsibilities)
+- [Subsystem Walkthrough (Grand Scheme)](#subsystem-walkthrough-grand-scheme)
 - [Data Contracts and Runtime Behavior](#data-contracts-and-runtime-behavior)
 - [Setup](#setup)
 - [Run Modes](#run-modes)
@@ -135,6 +136,81 @@ Members:
 | ML + perception | Mia Beltran | Posture model training assets, posture/eye feature logic, calibration strategy | `mia/posture_dataset.csv`, `mia/posture_model.pkl`, `mia/machine_learning_training_code`, `robot/health_monitor.py`, `robot/pi_health_monitor.py` |
 | Robot interaction layer | Roshni Padala, Jocelin Santocki | Face expression mapping, coaching timing and message behavior, voice interaction flow | `robot/main.py`, `robot/pi_main.py`, `robot/faces/` |
 | System integration + architecture | Lincy Phipps, Gael Garcia | Cross-module integration, telemetry standardization, runtime mode orchestration, BLE->USB serial decision | `robot/pi_main.py`, `wearable/read_esp.py`, `esp32/src/main.cpp` |
+
+## Subsystem Walkthrough (Grand Scheme)
+
+This section answers: "What does each part do by itself, and why does it matter to the full system?"
+
+### 1. Wearable Sensing + Firmware (`esp32/src/main.cpp`)
+Local function:
+- Samples sensors, computes smoothed metrics, updates wearable display, and emits serial packets.
+
+System-level role:
+- Creates the physiological context that the robot can use (especially HR/stress trends).
+- Serves as the source of truth for numeric biometrics shown in logs and Pi overlay.
+
+Example in practice:
+- If motion spikes and GSR shifts, stress value increases in telemetry.
+- That value is visible immediately on-device and in serial logs, which helps explain later coaching behavior during debugging.
+
+### 2. Communication Layer (USB Serial)
+Local function:
+- Transports wearable data in a stable packet format to host-side scripts.
+
+System-level role:
+- Decouples hardware collection from robot software so both can evolve independently.
+- Lets multiple consumers observe the same live stream (`wearable/read_esp.py`, `robot/pi_main.py`).
+
+Example in practice:
+- During a demo, `wearable/read_esp.py` can verify incoming HR packets while robot mode is running, confirming the pipeline is alive end-to-end.
+
+### 3. Perception Layer (`robot/health_monitor.py`, `robot/pi_health_monitor.py`)
+Local function:
+- Calibrates camera baseline, computes posture and eye-closure metrics, and outputs health snapshots.
+
+System-level role:
+- Converts raw camera frames into actionable behavior signals (bad posture accumulation, long eye closures, readiness state).
+- Provides the behavior-side context that complements wearable biometrics.
+
+Example in practice:
+- A user slouches for a sustained period; bad-posture seconds rise in the 60-second window.
+- Robot runtime receives this as a posture risk signal and prioritizes posture coaching.
+
+### 4. Robot Coaching Layer (`robot/main.py`, `robot/pi_main.py`)
+Local function:
+- Reads monitor state, selects coaching category, switches face expression, and speaks prompts.
+
+System-level role:
+- Acts as the decision-and-feedback endpoint for all upstream sensing.
+- Turns technical metrics into understandable, user-facing interventions.
+
+Example in practice:
+- If eye closures cross threshold and posture also degrades, category can move to `mixed`.
+- Robot picks corresponding face and delivers a combined reset prompt.
+
+### 5. Integration Layer (Cross-Subsystem Glue)
+Local function:
+- Aligns packet contracts, runtime defaults, and mode behavior between wearable, monitor, and robot code.
+
+System-level role:
+- Prevents subsystem drift by ensuring each layer speaks a compatible interface.
+- Enables reproducible team handoff, where members can trace cause-and-effect across modules.
+
+Example in practice:
+- A change to packet fields in firmware must be reflected in parser logic on Pi runtime.
+- Keeping this contract synchronized avoids silent failures like missing HR overlay values.
+
+### Full-Chain Scenario Example
+
+User behavior:
+- User sits with worsening posture and takes frequent long eye closures while working.
+
+Signal path:
+1. Camera monitor records high bad-posture time and long eye-closure events.
+2. Snapshot metrics are consumed by robot runtime at coaching interval.
+3. Decision logic categorizes risk (`posture_major`, `eye_strain`, or `mixed`).
+4. Robot updates expression and delivers a targeted spoken coaching message.
+5. In Pi mode, wearable HR data can be displayed alongside this behavior state for additional context.
 
 ## Data Contracts and Runtime Behavior
 
